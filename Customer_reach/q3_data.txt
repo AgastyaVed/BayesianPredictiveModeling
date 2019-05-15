@@ -1,0 +1,2 @@
+Number of surveys 0 1 2 3-5 6+
+Number of respondents 1020 166 270 279 130

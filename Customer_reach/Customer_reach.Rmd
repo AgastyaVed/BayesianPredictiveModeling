@@ -1,0 +1,259 @@
+---
+title: "Predicting customer reach"
+author: "Kumar S Das"
+date: "February 6, 2018"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r message=FALSE, echo=FALSE}
+suppressPackageStartupMessages(library(BTYD))
+suppressPackageStartupMessages(library(hypergeo)) 
+library(knitr)    #Install and use knitr
+library(ggplot2) #Install and use ggplot2
+library(tidyr)   #Install and use tidyr
+library(dplyr)
+library(reshape2)
+
+options(digits = 4)
+```
+###Question-1
+Joyful Voyages runs vacation cruises to various destinations around the world. In 2006, the company
+acquired a new cohort of 18,402 customers who took their first cruise that year. The cruises.txt file records all 25,257 cruises taken by this cohort from 2006 to 2010. By definition, all customers take a cruise in the year in which they are acquired (in this case, 2006), so we are modeling only the repeat cruises. For all parts, assume an annual discount rate of 13%.
+
+First we import and reshape the dataset so that we can use the BTYD package. Then we optimize it to obtain the parameters.
+```{r}
+
+#import dataset
+cruises <- read.table("cruises.txt",header = TRUE, sep= "")
+cruises[is.na(cruises)] <- 0
+
+min <- min(as.integer(cruises[['year']]))
+max <- max(as.integer(cruises[['year']]))
+
+m <- max -min  #m number of transactions
+
+cruises[,'year'] <- as.character((cruises[['year']]))
+start_year = 2006
+
+cruises1 <- cruises %>%
+  group_by(ID)%>%
+  summarize(x=length(ID)-1)%>%      ##find frequency
+select(ID,x)
+
+cruises2 <- mutate(cruises, y=as.numeric(year)-start_year) %>%
+  group_by(ID)%>%
+  summarize(t.x=max(y))%>%         ##find recency
+  select(ID,t.x)
+
+data <- merge(cruises1,cruises2,by="ID")
+
+Tobs <- nrow(cruises)         
+
+df <- cbind(data[,2:3], n.cal = m, custs=Tobs)
+
+parms <- bgbb.EstimateParameters(df)
+a <- parms[1]
+b <- parms[2]
+c <- parms[3]
+d <- parms[4]
+a
+b
+c
+d
+
+```
+####Question-1(a)
+Under the assumptions of the BG-BB model, customers may be in either an active or inactive state. Describe the distributions of customers' propensities to take a cruise while in the active state, and the propensity to transition to an inactive state at the start of each year. Include in your discussion the the means of the latent parameters, and an assessment of how those parameters vary across the population.
+```{r}
+#The "while alive" purchase probability p is heterogrneous. We set the p with the beta(a,b). Therefore, the distribution of customers' propensities to take a cruise while active should be:
+Eprob <- a/(a+b)
+Eprob
+
+```
+The parameters a(alpha), b(beta) describe the beta-geometric distribution of the probability that a customer takes a cruise while in active state. The plot shows that it is skewed right with narrow tails. This implies there is less heterogeneity in data.
+```{r results="hide"}
+bgbb.PlotTransactionRateHeterogeneity(parms)
+```
+
+```{r}
+#The "death probability" theta is heterogrneous. We set the theta with the beta(c,d). Therefore, the distribution of customers' propensities to transition to an inactive state should be:
+Etheta <- c/(c+d)
+Etheta
+```
+The parameters c(gamma) and d(delta) describe the probability of a customer transitioning into inactive state. This plot shows that the distribution is skewed, indicating low heterogeneity. 
+```{r results="hide"}
+bgbb.PlotDropoutRateHeterogeneity(parms)
+```
+
+####Question-1(b)
+Suppose that the company acquires a new cohort, with similar characteristics to the 2006 cohort. After the cohort takes its initial cruise, how many repeat cruises can we expect from the cohort in the next 1, 2, 3, 4, and 5 years?
+
+```{r}
+bgbb.Expectation(parms,1:5)
+```
+
+####Question-1(c) 
+The company often acquires new customers through targeted online marketing campaigns. It believes that in an uncoming campaign, it can acquire 1,500 new customers. What is the most that the company should spend on that campaign? Since the customers have not yet been acquired, payment for the first cruise has not yet been made. However, once the customer is acquired, the first payment will be certain and immediate.
+```{r}
+new <- 1500
+dert <- bgbb.DERT(parms,x=0,t.x=0,n.cal=0,d=0.13)
+##expected value of campaign
+spend <- new*(1+dert)
+spend
+```
+**$2401** is the maximum amount that the company should spent on the campaign.
+
+####Question-1(d)
+At the end of the 2010 cruising season, what was the expected residual lifetime value of the 2006 cohort?
+```{r}
+
+Dert <- bgbb.DERT(parms,x=data$x, t.x=data$t.x, n.cal =m,d=0.13)
+ERLV <- sum(Dert)
+ERLV
+
+```
+**$9611** is the expected lifetime value of the 2006 cohort
+
+
+
+###Question-2. 
+Posted on Blackboard is a text file, khakichinos.txt, that contains Internet visit data for a sample of 2,728 comScore/Media Metrix panelists who visited at least one online apparel site in the second half of 2008. This dataset shows the number of visits that each person made at one particular site (with the disguised name of khakichinos.com) in January, 2009. Ignore the covariate data (the demographic information) for now.
+
+####Question-2(a) 
+Fit an NBD model to the data. What do the parameter estimates tell us about the different kinds of customers in the Khakichinos customer base?
+```{r}
+khak <- read.table("khakichinos.txt",header = TRUE, sep= "")
+
+log_P <- function(r,a,x,t=1){
+  lgamma(r+x)-lgamma(r) -lfactorial(x) +
+    r*(log(a)-log(a+t))+
+    x*(log(t)-log(a+t))
+  
+}
+
+LL_NBD <- function(pars, x, t=1, N=1) {
+  r <-exp(pars[1])
+  a <-exp(pars[2])
+  LL_all <- sum(N* log_P(r,a,x,t=1))
+  return (-LL_all)
+}
+
+opt_NBD <- optim(c(0,0), fn=LL_NBD, x=khak$Visits, t, N)
+
+r <- exp(opt_NBD[["par"]][1])
+a <- exp(opt_NBD[["par"]][2])
+#Since we use the NBD model to the data, we will use the gamma distribution to distributed across the population. The gamma(r,a) should be:
+r
+a
+```
+The shape(r) and rate(a) parameters have small values. 
+r<1 implies that the gamma distribution has an asymptote at lambda=0
+
+```{r}
+#The expected visits of events in T periods is:
+mean <- r/a
+mean
+```
+The expected value of lamda tells us about the average number of visits in the time frame. It can be inferred that on average a customer visits the website once a month.
+```{r}
+# The variance is:
+var <- r/a**2
+var
+```
+High variance implies that there is heterogeneity in data.
+
+####Question-2(b) 
+Plot the expected reach of the khakichinos website as a function of time, from 0 to 36 months. What is the expected reach during 12 months?
+
+```{r}
+reach <- data.frame("Month" = (0:36))
+reach <- mutate(reach, "Reach" = 1-exp (r*(log(a)-log(a+reach$Month))))
+
+#plot the expected reach of the website
+graph <- ggplot(reach, aes(x =reach$Month, y = reach$Reach)) +
+  geom_line() +
+  ggtitle("Expected Reach During 12 Month") +
+  scale_x_continuous(name = "month") +
+  scale_y_continuous(name = "reach")
+graph
+
+```
+```{r}
+#The expected reach during 12 months
+reach[1:13,1:2]
+```
+
+
+####Question-2(c) 
+Table 1 includes visit counts from the past three months for five randomly selected users from the same population as the source of the dataset. For each user, what is the expected number of visits for the next month, the month after, and the two months after that? That is, if we are at the end of Month 3, what are the expected visit counts for Month 4 alone, Month 5 alone, and Months 6 and 7 combined?
+
+```{r}
+m1 <- c(0,2,0,0,6)
+m2 <- c(0,0,5,0,5)
+m3 <- c(0,0,4,1,4)
+ExpC <- cbind.data.frame(m1,m2,m3)
+
+
+Pred <- function(x,t) {
+  exp(log(r+x)-log(a+t))
+}
+
+m4 <- Pred(rowSums(ExpC[,1:3]),3)
+m5 <- Pred(rowSums(ExpC[,1:3]),3)
+m6 <- 2*Pred(rowSums(ExpC[,1:3]),3)
+ExpC <- cbind.data.frame(ExpC,m4,m5,m6)
+rownames(ExpC) <- c("A","B","C","D","E")
+colnames(ExpC) <- c("Month1", 
+                    "Month2", 
+                    "Month3", 
+                    "Month4", 
+                    "Month5", 
+                    "Month6&7")
+ExpC
+```
+
+
+###Question-3. 
+Table 2, taken from a paper by Bickart and Schmittlein (1999), shows the number of surveys filled out by a sample of 1865 Americans in 1995. Fit an NBD model, discuss the results, and forecast how many respondents are expected to complete ???? = 0, 1, 2, . , 10 surveys.
+
+```{r}
+
+Num <- c(1020,166,270,279,130)
+
+log_P <- function(r,a,x,t){
+  lgamma(r+x)-lgamma(r) -lfactorial(x) +
+    r*(log(a)-log(a+t))+
+    x*(log(t)-log(a+t))
+  
+}
+
+LL_NBD3 <- function(pars,N) {
+  r <-exp(pars[1])
+  a <-exp(pars[2])
+  LL3_all <- Num[1]*log_P(r,a,0,1)+
+    Num[2]*log_P(r,a,1,1) +
+    Num[3]*log_P(r,a,2,1) +
+    Num[4]*log(exp(log_P(r,a,3,1)) + exp(log_P(r,a,4,1))+exp(log_P(r,a,5,1))) +
+    Num[5]*log(1-sum(exp(log_P(r,a,0:5,1))))
+  return (-LL3_all)
+}
+
+opt_NBD3 <- optim(c(0,0), fn=LL_NBD3, N=Num)
+
+r3 <- exp(opt_NBD3[["par"]][1])
+a3 <- exp(opt_NBD3[["par"]][2])
+
+
+Sample <- 1865
+#PredTable <- cbind.data.frame(exp(log_P(r3,a3,0:10,1)),Sample*exp(log_P(r3,a3,0:10,1)))
+Predictions <- round(Sample*exp(log_P(r3,a3,0:10,1)),0)
+Predictions1 <- c(Predictions[1:3],sum(Predictions[4:6]),sum(Predictions[7:11]))
+PredTable <- data.frame(cbind(Num,Predictions1))
+colnames(PredTable) <- c("Observed","Predicted")
+PredTable
+
+
+```
+
