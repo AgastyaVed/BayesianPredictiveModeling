@@ -1,0 +1,450 @@
+---
+title: "Probabilistic marketing models"
+author: "kumar S Das"
+date: "February 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(reshape2)
+library(arm)
+library(MASS)
+options(digits = 4)
+```
+
+###Question-1
+####Q1(a) 
+What do each of the models predict will be the penetration of coffee creamer purchases after 1period? What about after 5 periods? 26 periods?
+```{r}
+r_nbd <- 0.181
+a_nbd <- 0.059
+r_hcnb <- 1.226
+a_hcnb <- 0.215
+p_hcnb <- 0.551
+
+reach_nbd <- function(r,a,T){
+  return(1-(a/(a+T))**r)
+}
+
+reach_hcnb <- function(r,a,p,T){
+  return(1-(p+(1-p)*((a/(a+T))**r)))
+}
+
+T <- c(1,5,26)
+nbd=reach_nbd(r_nbd,a_nbd,T)
+hcnb=reach_hcnb(r_hcnb,a_hcnb,p_hcnb,T)
+reach <- cbind(T,nbd,hcnb)
+reach <- as.data.frame(reach)
+names(reach) <- c("Week","NBD Reach","HCNB Reach")
+reach
+```
+####Q1(b) 
+If you were the product manager for this particular brand of coffee creamer, and your manager asked you to estimate the maximum penetration that you could expect from this product, what one answer would you give? How would you justify the answer?
+```{r}
+T1 <- seq(1:500)
+nbd1=reach_nbd(r_nbd,a_nbd,T1)
+hcnb1=reach_hcnb(r_hcnb,a_hcnb,p_hcnb,T1)
+reach1 <- cbind(T1,nbd1,hcnb1)
+reach1 <- as.data.frame(reach1)
+
+ggplot(data=reach1) +
+  geom_line(aes(x=T1, y=nbd1,col='NBD'))+
+  geom_line(aes(x=T1, y=hcnb1,col='HCNB'))+
+  scale_colour_manual("", 
+                      breaks = c("NBD", "HCNB"),
+                      values = c("red","blue"))
+```
+
+The maximum penetration that we could expect from this product is: 0.449.
+```{r}
+1-p_hcnb
+```
+
+Considering the NBD model we will achieve a maximum reach of 1 if we wait out long enough. However considering the HCNB model, we can only achieve a maximum reach of 0.449. This is because in HCNB model we target those customers who are ever triers. Even though we can reach out to more customers using NBD model, it can be observed from the plot that the NBD curve approaches the asymptote(1) very slowly, whereas the HCNB rach curve approache its asyptote (0.449) at much faster rate, implying that we can reach out to the ever triers faster.    
+
+
+###Q2 -Ace snackfoods
+Ace Snackfoods, the maker of Krunchy Bits, conducted a trial launch in Tulsa. They monitored purchases of 1,300 panelists for 52 total weeks. The file KB_Tulsa.txt contains the ID number of each panelist, the Market (Tulsa for everyone), and the week of the purchase.
+
+####Q2(a)
+ Divide the sample into a 20-week "calibration" set, and a 32-week "holdout" set. Estimate and describe the distribution of purchase rates using only the calibration data.
+ 
+
+```{r, warning=FALSE, echo=FALSE}
+data <- read.table('KB_Tulsa.txt',header=T)
+
+d <- data %>% 
+  group_by(ID) %>%
+  arrange(ID,Week) %>% 
+  dplyr::summarise(Week=min(Week)) 
+  
+d1 <- table(d$Week) # no. of customers by weeks
+d1 <- data.frame(d1) %>%
+  mutate(cumHH = cumsum(Freq)) %>%
+  mutate(Week=Var1, incrHH=Freq) %>%
+  dplyr::select(Week, incrHH, cumHH)
+
+#convert week from factors to numeric type
+d1$Week <- as.character(d1$Week)
+d1$Week <- as.integer(d1$Week)
+
+# Splitting data into training and test set
+training_set = d1[1:20, ] #first 20 weeks
+test_set = d1[21:length(d1$Week), ] #weeks from 21 till end
+```
+We tested three models to fit the calibration period data. Shown below are the ENT, EG and NBD models. We chose NBD model to fit the holdout data
+
+**ENT model**
+```{r}
+#log of probability of customers for t<=T
+log_p_exp <-function(l,t){
+  return(log(exp(-l*(t-1))-exp(-l*t)))
+}
+
+#log of probability of customers for t>T
+log_p_exp1 <- function(l,T){
+  return(log(1-exp(-l*T)))
+}
+
+# Log likelihood for ENT model
+ll_ent <- function(pars,d,Ntot){
+  l <- exp(pars[1]) 
+  p <- invlogit(pars[2])
+  t <- d$Week# vector of weeks
+  W <- length(t) #total no. of weeks
+  T <- t[W]
+  N <- d$incrHH
+  Nsurv <- Ntot-sum(N)
+  t1 <- p*exp(log_p_exp(l,t))
+  t2 <- (1-p)+p*(1-exp(log_p_exp1(l,T)))
+  t3 <- N*log(t1) #log likelihood of customers who purhcased
+  t4 <- Nsurv*log(t2) #log likelihood of surviving customers
+  ll_tot <- sum(t3)+t4 #total log likelihood
+  return(-ll_tot)
+}
+
+# Parameters estimates of ENT model
+
+Ntot <- 1300 #total no. of customers
+opt_ent <- optim(c(0,0), fn=ll_ent, d=training_set, Ntot=1300)
+params <- opt_ent$par
+l_ent <- exp(params[1])
+p_ent <- invlogit(params[2])
+
+# Collecting the results into a dataframe
+d2 <- data.frame(matrix(NA, nrow=length(d1$Week),ncol=5))
+names(d2) <- c(names(d1), 'pred_incrHH', 'pred_cumHH')
+d2[,1:3] <- d1
+d2 <- d2 %>% mutate(pred_incrHH=Ntot*p_ent*exp(log_p_exp(l_ent,Week)),
+                    pred_cumHH=cumsum(pred_incrHH)) %>% 
+  mutate(pred_incrHH=round(pred_incrHH,0),
+         pred_cumHH=round(pred_cumHH,0))
+```
+The parameter estimates of ENT model are:
+```{r}
+l_ent
+p_ent
+```
+
+**EG model**
+```{r}
+# log probability of EG 
+log_p_eg <- function(a,r,t){
+  t1 <- 1-(a/(a+t))^r
+  t2 <- 1-(a/(a+(t-1)))^r
+  return(log(t1-t2))
+}
+
+# Log likelihood for EG model
+ll_eg <- function(pars,d,Ntot){
+  a <- exp(pars[1]) #converts output from (-inf,inf) to (0,inf)
+  r <- exp(pars[2])
+  t <- d$Week# vector of weeks
+  W <- length(t) #total no. of weeks
+  T <- t[W]
+  N <- d$incrHH
+  Nsurv <- Ntot-sum(N)
+  t41 <- log_p_eg(a,r,t)
+  t42 <- 1-sum(exp(t41))
+  t43 <- N*(t41)
+  t44 <- Nsurv*log(t42)
+  ll_tot <- sum(t43)+t44
+  return(-ll_tot)
+}
+
+# Parameters estimates of EG model
+Ntot <- 1300
+opt_eg <- optim(c(0,0), fn=ll_eg, d=training_set, Ntot=Ntot)
+params <- opt_eg$par
+a_eg <- exp(params[1])
+r_eg <- exp(params[2])
+ll_eg <- -opt_eg$value
+
+# Collecting the results into a dataframe
+d3 <- d2
+d3[, c('pred_incrHH_EG', 'pred_cumHH_EG')] <- NA
+d3 <- d3 %>% 
+  mutate(pred_incrHH_EG=Ntot*exp(log_p_eg(a_eg,r_eg,Week)),
+         pred_cumHH_EG=cumsum(pred_incrHH_EG)) %>% 
+  mutate(pred_incrHH_EG=round(pred_incrHH_EG,0),
+         pred_cumHH_EG=round(pred_cumHH_EG,0))
+
+```
+
+The paremeter estimates of EG model are
+```{r}
+a_eg
+r_eg
+```
+
+**NBD model**
+```{r}
+Tulsa <- read.table("KB_Tulsa.txt", header = T)
+calib <- Tulsa[Tulsa$Week <= 20,]
+holdout <- Tulsa[Tulsa$Week >20,]
+
+calib <- calib %>%
+  dplyr::group_by(ID) %>%
+  dplyr::select(ID) %>%
+  dplyr::summarise(x=n())%>%
+  dplyr::select(x) %>%
+  dplyr::group_by(x) %>%
+  dplyr::summarise(n=n())
+
+calib <- rbind(c(0,1300-sum(calib$n)),calib)
+
+log_nbd <- function(r,alpha,x,T) {
+  lgamma(r+x)-lgamma(r)-lfactorial(x)+r*(log(alpha)-log(alpha+T))+x*(log(T)-log(alpha+T))
+}
+
+LLfunc <- function(pars,x,n,T) {
+  r <- exp(pars[1])
+  alpha <- exp(pars[2])
+
+  LL_all <- sum(n*log_nbd(r,alpha,x,T))
+  return(-LL_all)
+}
+
+start <- c(0,0)
+opt <- optim(start, LLfunc,x=calib$x,n=calib$n, T=20)
+r <- exp(opt$par[1])
+alpha <- exp(opt$par[2])
+LL <- -opt$value
+```
+The parameters estimates of NBD model are:
+```{r}
+cat("BG parameters: r = ",r,", alpha = ",alpha,". LL = ",LL,"\n")
+
+```
+
+
+####Q2(b) 
+Using the parameter estimates from the calibration set, compare the predicted counts for both the calibration and holdout periods. That is, using the parameters estimated from the first 20 weeks of data, predict for those same 20 weeks, and forecast for the next 32 weeks. Compare the predictions/forecasts with the observed data, and assess the model performance. Explain why the models perform as well as, or as poorly as, they do
+
+Shown below are the plots for the three models,showing how they fit the calibration and holdout period data.
+
+Plots for the 
+**NBD model**
+```{r}
+N <- 1300
+
+calib_pred <- calib %>%
+  mutate(prob=exp(log_nbd(r,alpha,calib$x,20))) %>%
+  mutate(pred=N*prob)
+
+holdout <- holdout %>%
+  dplyr::select(ID) %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarise(x=n())%>%
+  dplyr::select(x) %>%
+  dplyr::group_by(x) %>%
+  dplyr::summarise(n=n())
+holdout <- rbind(c(0,1300-sum(holdout$n)),holdout)
+
+holdout_pred = holdout %>%
+  mutate(prob=exp(log_nbd(r,alpha,holdout$x,32))) %>%
+  mutate(pred=N*prob)
+
+pcalib <- calib_pred %>%
+  dplyr::select(x,Observed = n,NBD=pred) %>%
+  tidyr::gather(model,value,-x)
+
+phold <- holdout_pred %>%
+  dplyr::select(x,Observed=n, NBD=pred) %>%
+  tidyr::gather(model,value,-x)
+
+(calib_plot <- pcalib %>% 
+                ggplot(aes(x = x, y = value, fill = model)) %>%
+                + geom_bar(stat='identity', position='dodge') %>% 
+                + scale_x_continuous("Purchases", breaks = 0:12) %>% 
+                + scale_y_continuous("Panelists") %>% 
+                + ggtitle("Predicted Counts For Calibration"))
+
+
+(hold_plot <- phold %>% 
+                ggplot(aes(x = x, y = value, fill = model)) %>%
+                + geom_bar(stat='identity', position='dodge') %>% 
+                + scale_x_continuous("Purchases", breaks = 0:12) %>% 
+                + scale_y_continuous("Panelists") %>% 
+                + ggtitle("Predicted Counts For Holdout"))
+```
+
+
+Plots comparing the ** ENT and EG models** versus the actual data
+
+```{r}
+# Plots to comapre model prediction
+ggplot(data=d3)+
+  geom_point(aes(x=Week, y=cumHH, col='Data'))+
+  geom_line(aes(x=Week, y=pred_cumHH, col='ENT'))+
+  geom_line(aes(x=Week, y=pred_cumHH_EG, col='EG'))+
+  scale_colour_manual("", 
+                      breaks = c("Data", "ENT", "EG"),
+                      values = c("black","red","blue"))
+```
+
+Both the models fit approximately the same in the calibration period. In the holdout period the ENT model fits the data better. EG model assumes heterogeneity in the rate parameter. The poor fit might mean that there is no heterogeneity in data.Infact the values of rate and shape parameter estimated for the gamma distribution tells us that the distribution of lambda is highly skewed towards lower values, indicating that the customers are homogeneous
+
+
+
+
+####Q2(c)
+Using the same model that you used in part 2a, estimate and describe the distribution of purchase rates using only the data in the holdout sample. Compare and contrast the estimated distribution with the one from part 2a.
+
+We decided to chose the NBD model. So we estimate the fit again using only the holdout period data
+
+```{r}
+start <- c(0,0)
+opt <- optim(start, LLfunc,x=holdout$x,n=holdout$n, T=32)
+r <- exp(opt$par[1])
+alpha <- exp(opt$par[2])
+LL <- -opt$value
+par_pred_hold <- c(r,alpha,LL)
+```
+The parameters predicted using the NBD model for holdout preiod are:
+```{r}
+cat("BG parameters: r = ",r,", alpha = ",alpha,". LL = ",LL,"\n")
+```
+
+```{r}
+hold_pred2 = holdout %>%
+  mutate(prob=exp(log_nbd(r,alpha,holdout$x,32))) %>%
+  mutate(pred=N*prob)
+
+phold2 <- hold_pred2 %>%
+  dplyr::select(x,Observed=n, NBD=pred) %>%
+  tidyr::gather(model,value,-x)
+
+(hold_plot2 <- phold2 %>% 
+                ggplot(aes(x = x, y = value, fill = model)) %>%
+                + geom_bar(stat='identity', position='dodge') %>% 
+                + scale_x_continuous("Purchases", breaks = 0:12) %>% 
+                + scale_y_continuous("Panelists") %>% 
+                + ggtitle("Predicted Counts For Holdout"))
+```
+
+A comparison of the parameters estimated for the calibration and holdout data using the NBD model: 
+
+```{r}
+#parameter estimates using calibration data
+opt1 <- optim(start, LLfunc,x=calib$x,n=calib$n, T=20)
+r1 <- exp(opt1$par[1])
+alpha1 <- exp(opt1$par[2])
+LL1 <- -opt1$value
+par_pred_calib <- c(r1,alpha1,LL1)
+
+#parameter estimates using holdout data
+opt <- optim(start, LLfunc,x=holdout$x,n=holdout$n, T=32)
+r <- exp(opt$par[1])
+alpha <- exp(opt$par[2])
+LL <- -opt$value
+par_pred_hold <- c(r,alpha,LL)
+as.data.frame(cbind(par_pred_calib,par_pred_hold),row.names = c("r","alpha","log likelihood"))
+
+```
+
+
+####Q2(d) 
+Given your answers to the preceding parts, give an overall, intuitive explanation of differences between the calibration and holdout periods. How might you refine your model to account for the differences?
+
+Ans: 
+As we can see in the comparasion, the estimated distribution of purchase rates in holdout period  shift lower than the calibration dataset. 
+After calculation, the average purchase rate for holdout is a bit smaller than the calibration. There might have noise and nonstationary in the distribution. 
+Since customers under NBD model we assume they will make a purchase eventually. Therefore, customers will drop out the purchaseing process over time.
+
+###Q3
+ I estimated the exponential-gamma model using all 52 weeks of the Krunchy Bits data, and got estimates r=0.045, alpha=6.764
+ 
+####Q3(a)
+Using these parameter estimates, what is the probability that a randomly chosen person makes his or her initial purchase within the first year (by the end of week 52)?
+```{r}
+r = 0.045; alpha=6.764
+eg <- function(r,alpha,t) {
+  1-(alpha/(alpha+t))^r
+}
+p52 <- eg(r,alpha,52)
+# the prob that a randomly chosen person amkes pruchase in the first 52 weeks si same as the reach
+p52
+```
+
+####Q3(b)
+ What is the probability that someone who has not yet purchased Krunchy Bits by the end of the first year would make his initial purchase by the end of year 2 (week 104)?
+
+```{r}
+prob_nt <- 1-p52
+prob_ba <- eg(r,alpha,104)-p52
+
+prob_ba/prob_nt
+```
+ 
+####Q3(c)
+Are your answers to parts 3a and 3b the same, or different? Give an intuitive explanation of why
+
+Ans: 3(b) is conditional on the first year purchase, the prob of buying is lower if the person does not buy at the first year.The probability of making a pruchase goes down as time increases. More customers are likely to buy when the product is laucnhed. As time increases the impact of the product launch decreases without the aid of any marketing. So it can be expected that the probabilty of pruchase would also go down.
+
+####Q3(d)  
+Suppose I estimated a Weibull-gamma model instead. How do you think your answer
+to part 3b might change in the presence of positive (c > 1) or negative (c <
+1)duration dependence. You may assume that the estimates do not change.
+
+Ans:
+A positive duration dependence implies that the customer will make a pruchase soon than when we don't consider any duration dependence (i.e., c = 1). In that case the time to first purhcase would decrease as the factor c has an accelerating effect on time. This means lamda goes up. The expected number of purchases in the same time period increases.
+On the contrary, when c < 1, it has a dilating effect on time, delaying time to first purhcase. This implies that the mean expected purchase is less compared to the case when c =1;
+
+####Q3(e) 
+```{r}
+lamda <- 0.066
+p<- 0.085
+t3<-24
+
+F <- function(lamda,t3){
+ 1-exp(-lamda*t3)
+}
+
+#under the condition of not yet purchase by week 24
+probability <- (1-p)/(1-p +p*(1-F(lamda,t3)))
+probability
+```
+
+
+####Q3(f)
+ I also estimated an exponential-gamma-never-triers (EG-NT) model, and got parameter estimates p = 0.086, r = 77624, alpha = 11185426. Given the ENT estimates from class, can you explain why the estimates of r and alpha so large?
+
+```{r}
+p3 <- 0.086
+r3 <- 77624
+a3 <-1185146
+lambda3 <- r3/a3
+lambda3
+```
+Since the alpha and r are large, the lamda will become quite small. large values of the shape and rate parameters tells us that the distribution is higly skewed. The results are valid becuase we observed in the data that most of the customers are non-buyers. Therefore we expect the density function to be skewed towards low values of lambda.
+
+
+
