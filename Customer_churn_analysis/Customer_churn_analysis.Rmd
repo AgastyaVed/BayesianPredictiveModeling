@@ -1,0 +1,158 @@
+---
+title: "Customer churn analysis"
+author: "KSD"
+date: "January 10, 2018"
+output: 
+    # pdf_document: default
+    html_document: default
+    toc: true
+---
+
+```{r}
+library(knitr)
+opts_chunk$set(tidy = TRUE)
+```
+
+##Loading libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+```
+## Loading data
+```{r}
+d <- read.csv('data.csv',header=T)
+d[,1] <- as.character(d[,1])
+#d[,2] <- as.numeric(d[,2])
+str(d)
+```
+## Data manipulation
+```{r}
+t <- c(1:length(d[,2])) # t= month number
+d1 <- cbind(d,t)
+d1 <- mutate(d1,S=Active,t1=t-1) # t1 = preiod number of each month; S = active customers;
+d1 <- mutate(d1, N= -c(NA,diff(d1$S))) # N = churned customers
+d2 <- d1 %>% select(t1, S, N)
+S0 <-  d2[["S"]][1] #initial cohort size
+N1 <- d2[["N"]][-1] # vector of incremental churns
+S1 <- d2[["S"]][length(t)] #last element of active customers column
+```
+
+# Q1 BG model
+## Defining the log likelihood of BG
+```{r}
+# log of P
+log_P <- function(t, a, b) {
+  lbeta(a+1, b+t-1) - lbeta(a, b)
+}
+# log of S
+log_S <- function(t, a, b) {
+  lbeta(a, b+t) - lbeta(a,b)
+}
+#log likelihood of Beta Geometric functions 
+LL_BG <- function(pars, N, S) {
+  a <- exp(pars[1])
+  b <- exp(pars[2])
+  Tobs <- length(N)
+  t <- 1:Tobs
+  LL_p <- sum(N * log_P(t,a, b))
+  LL_s <- S * log_S(Tobs, a, b)
+  LL_all <- LL_p + LL_s
+  return(-LL_all) ## scalar
+}
+```
+## Optimizing a and b parameters of the Beta function
+```{r}
+opt_BG <- optim(c(0,0),fn=LL_BG,
+N=N1, S=S1)
+a <- exp(opt_BG[["par"]][1])
+b <- exp(opt_BG[["par"]][2])
+LL <- -opt_BG[["value"]]
+#Log likelihood estimates of a and b are:
+print(a);print(b)
+#Log likelihood value at the estiamted parameters:
+print(LL)
+```
+
+# Q2
+##(a)Probability that this customer will cancel service after only one month
+```{r}
+exp(log_P(1,a,b)) #t=1. P(T=1|a,b)=(theta*(1-theta)^2)
+```
+
+##(b)Probability that this customer will cancel service after 2 months
+```{r}
+exp(log_P(2,a,b)) #t=2. P(T=2|a,b)=(theta*(1-theta)^2)
+```
+##(c)Probability that he will renew for March
+```{r}
+exp(log_S(3,a,b)) #t=3 for March. S(3)=(1-theta)^3
+```
+##(d)renewal probability for a customer who remained active through August
+```{r}
+exp(log_S(8,a,b)) #t=8 for August. S(8)=(1-theta)^3
+```
+##(e)Members active through the end of the year
+```{r}
+#To forecast customer counts, evaluate the survival function at each value of ???, and multiply by the size of the cohort(ref: Week_1_slides,pg34)
+round(S0*exp(log_S(12,a,b)),0) #t=12 for December. S(3)=(1-theta)^3
+```
+
+# Q3
+##(a)
+
+```{r}
+# Making the table shown in Q3(a)
+S3 <- matrix(0,nrow=12, ncol=4)
+for (i in c(1:4)){
+  S3[i,i]=2132
+}
+```
+
+```{r}
+S0 <- 2132 #intial cohort size
+t2 <- c(1:12) #Sep:august
+S_pred2 <- array() #declaring an empty array to be used below
+S4 <- S3
+
+for (i in c(1:4)){
+  t1 <- 12-i
+  t <- c(1:t1)
+  S01 <- S3[i,i] #2132 new customers
+  S_pred2 <- round(S01*exp(log_S(t,a,b)),0) #array of predicted remaining customers 
+  S4[,i] = c(S3[1:i,i], S_pred2) #all cohorts put into one matrix
+}
+rownames(S4) <- c(month.name[9:12],month.name[1:8])
+colnames(S4) <- month.name[c(9:12)]
+total <- rowSums(S4) 
+S4 <- cbind(S4, total)
+#S4 description: Col1 - The remainder from January cohort; col2 - The predicted customers for Sept...similarly the following columns; last column contains row sums
+```
+
+##(b) Retention rates
+## Predicted counts from BG models
+```{r}
+# calcualting the customers active after each interval
+S0 <- d[[2]][1] #intial cohort size
+t2 <- c(0:8) #interval for the year and for next year until August
+S_pred=round(S0*exp(log_S(t2,a,b)),0)
+```
+
+```{r}
+d4 <- cbind('January'= c(S_pred, rep(NA,dim(S4)[1]-length(S_pred))), S4) #combining the BG coutns from Jan to the other cohorts
+reten_rate <- apply(d4, 2, function(x){x/lag(x,1)}) #Retention rate of all cohorts
+reten_rate <- data.frame(reten_rate)
+reten_rate[reten_rate>1] <- NA # replace retention rate values greater than 1
+```
+
+```{r}
+#plotting all the retention rate
+months <- colnames(reten_rate)
+leg <- colnames(reten_rate)
+matplot(c(1:12), reten_rate, type = 'l', xlab="Months", ylab="Retention Rate")
+```
+
+
+
+
+
