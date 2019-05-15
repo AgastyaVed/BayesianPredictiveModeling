@@ -1,0 +1,144 @@
+---
+title: "Customer_valuation"
+author: "Kumar S Das"
+date: "January 23, 2018"
+output: 
+    pdf_document: default
+    toc: true
+---
+
+
+##Loading libraries
+```{r}
+library(ggplot2)
+suppressPackageStartupMessages(library(dplyr))
+library(knitr)
+opts_chunk$set(tidy = TRUE)
+library(reshape2)
+suppressPackageStartupMessages(library(hypergeo))
+```
+# Q1
+First we create the data set
+```{r}
+t <- 8 #max no. of renewals observed
+d <- dplyr::data_frame(t=0:t,
+                   S=c(2132, 1406, 1069, 894, 765, 656, 
+                       578, 525, 482),
+                   N=c(NA,-diff(S)))
+```
+
+Now we specify the different parameters to calcualte ECLV and ERLV
+```{r}
+m <- 70 
+dr <- .015 #discount rate
+a <- 0.791 #beta function 'a' parameter
+b <- 1.54 #beta function 'b' parameter
+```
+##1(a) What is the most that GetFit should spend to acquire a new customer?
+As we assume the population posterior to be defined by beta geometric distribution, the discounted expected lifetime (DEL) is given by the integral for all the values of retention rate
+```{r}
+del <- hypergeo(1,b,a+b,1/(1+dr))
+del <- suppressWarnings(as.numeric(del))
+eclv <- m*del
+```
+The maximum amount that GetFit should spend to acquire a new customer is should be less than the lifetime value of customer(eclv)
+```{r}
+eclv <- m*del
+eclv
+```
+
+##1(b) What is the most that GetFit should spend to retain an existing customer who was acquired 1 month ago?
+Customer aquired 1 month ago has had 1 renewal oppotunity (n = 1)
+```{r}
+derl <- function(n,a,b,d) {
+  q1 <- (b+n-1)/(a+b+n-1)
+  q2 <- hypergeo(1,b+n,a+b+n,1/(1+d))
+  return(suppressWarnings(as.numeric(q1*q2)))
+}
+
+erlv1 <- m*derl(1,a,b,dr)
+erlv1
+```
+
+
+##1(c)  What is the most that GetFit should spend to retain an existing customer who was acquired 10 months ago?
+Customer aquired 10 month ago has had 10 renewal oppotunities (n = 10)
+```{r}
+derl <- function(n,a,b,d) {
+  q1 <- (b+n-1)/(a+b+n-1)
+  q2 <- hypergeo(1,b+n,a+b+n,1/(1+d))
+  return(suppressWarnings(as.numeric(q1*q2)))
+}
+
+erlv10 <- m*derl(10,a,b,dr)
+erlv10
+```
+
+## 1(d)
+Ignoring heterogeneity leads to pooling all customers into one segment all having the same retention rate. This disregards the increased effect of customers with high retention rates who tend to bring in more revenue with increasing time. This leads to undervaluation of customers
+
+# Q2
+```{r}
+d <- read.table('bens_data.txt', header = T)
+```
+
+
+##2(a)
+```{r}
+round(sum(d$sales)/sum(d$mailed),4)
+```
+##2(b)
+```{r}
+round(mean(d$sales/d$mailed),4)
+```
+##2(c)
+```{r}
+d1 <- mutate(d, rr=sales/mailed)
+log_bb <- function(m,x,a,b){
+  lchoose(m,x) + lbeta(a+x,b+m-x) - lbeta(a,b)
+}
+
+N <- d[['mailed']]
+ll_bb <- function(pars,m,x){
+  a <- exp(pars[1])
+  b <- exp(pars[2])
+  temp <- sum(log_bb(m,x,a,b))
+  return(-temp)
+}
+
+m <- d1$mailed
+x <- d1$sales
+
+opt_bb <- optim(c(0,0), ll_bb, m=m, x=x)
+print('a');exp(opt_bb$par[1])
+print('b');exp(opt_bb$par[2])
+```
+##2(d)
+```{r}
+a/(a+b)
+```
+##2(e)
+```{r}
+
+```
+##2(f)
+```{r}
+m <- 1:2000
+x <- 0
+prob <- 1-exp(log_bb(m,x,a,b))
+plot(x=m, y=prob, type='l', col='red',
+     main='Reach',
+     xlab='m', ylab='1-P(X=0|m,a,b',
+     panel.first = grid())
+```
+##2(g)
+```{r}
+d1 <- data_frame(m=c(2,5,10,25,50,250,500),
+           Px0=exp(log_bb(m,0,a,b)),
+           Px1=1-Px0,
+           Px2=1-Px0-Px1) %>% 
+  select(m,Px0,Px1,Px2)
+t(d1)
+```
+
+
